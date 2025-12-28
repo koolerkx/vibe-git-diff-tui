@@ -49,6 +49,22 @@ export class GitService {
     });
   }
 
+  /**
+   * 獲取所有 Git 追蹤的檔案
+   */
+  async getAllTrackedFiles(): Promise<string[]> {
+    try {
+      const result = await this.runGit(['ls-files']);
+      return result
+        .trim()
+        .split('\n')
+        .filter(line => line.length > 0)
+        .sort(); // 排序方便處理
+    } catch (error) {
+      throw new Error(`Failed to get tracked files: ${error}`);
+    }
+  }
+
   async getDiff(args: { staged: boolean; path: string; status?: string }): Promise<string> {
     const isUntracked = args.status === '?' || args.status === '??';
 

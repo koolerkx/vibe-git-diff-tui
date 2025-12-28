@@ -19,7 +19,7 @@ type ListItem =
 type ViewMode = 'flat' | 'tree';
 
 // 輸入模式
-type InputMode = 'normal' | 'export-path';
+type InputMode = 'normal' | 'export-path' | 'export-overview';
 
 // 樹狀節點型別
 type TreeNode = {
@@ -58,8 +58,8 @@ async function getClipboardContent(): Promise<string> {
     }
 }
 
-// 時間戳檔案名生成函數
-function getTimestampedFileName(): string {
+// 生成帶時間戳的檔案名
+function getTimestampedFileName(prefix: string = 'diff'): string {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -68,8 +68,76 @@ function getTimestampedFileName(): string {
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
     
-    // 格式: diff_20251228_211945.txt (適合排序)
-    return `diff_${year}${month}${day}_${hours}${minutes}${seconds}.txt`;
+    // 格式: prefix_20251228_212945.txt
+    return `${prefix}_${year}${month}${day}_${hours}${minutes}${seconds}.txt`;
+}
+
+// 檔案大小格式化函數
+function formatFileSize(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+// 生成檔案概覽（所有 Git 管理的檔案）
+async function generateFileOverview(): Promise<string> {
+    const path = await import('path');
+    const fs = await import('fs');
+    
+    // 獲取所有 Git 追蹤的檔案
+    const allFiles = await git.getAllTrackedFiles();
+    
+    // 按目錄分組
+    const grouped = new Map<string, Array<{ name: string; size: number }>>();
+    
+    for (const filePath of allFiles) {
+        const dir = path.dirname(filePath);
+        const name = path.basename(filePath);
+        
+        // 獲取檔案大小
+        let size = 0;
+        try {
+            const fullPath = path.join(process.cwd(), filePath);
+            const stat = fs.statSync(fullPath);
+            size = stat.size;
+        } catch (error) {
+            // 檔案不存在或無法訪問，使用 0
+            size = 0;
+        }
+        
+        if (!grouped.has(dir)) {
+            grouped.set(dir, []);
+        }
+        grouped.get(dir)!.push({ name, size });
+    }
+    
+    // 排序目錄
+    const sortedDirs = Array.from(grouped.keys()).sort();
+    
+    // 生成輸出
+    let output = '';
+    
+    for (const dir of sortedDirs) {
+        const files = grouped.get(dir)!;
+        
+        // 排序檔案
+        files.sort((a, b) => a.name.localeCompare(b.name));
+        
+        // 目錄標題
+        const displayDir = dir === '.' ? '[.]' : `[${dir}]`;
+        output += `${displayDir}\n`;
+        
+        // 列出檔案
+        for (const file of files) {
+            output += `  - ${file.name} (${formatFileSize(file.size)})\n`;
+        }
+        
+        output += '\n';
+    }
+    
+    return output;
 }
 
 // 自製 Hook：取得終端機寬高
@@ -353,13 +421,13 @@ export const App = () => {
                 const stat = fs.statSync(resolvedPath);
                 if (stat.isDirectory()) {
                     // ✅ 如果是目錄，使用時間戳檔案名
-                    resolvedPath = path.join(resolvedPath, getTimestampedFileName());
+                    resolvedPath = path.join(resolvedPath, getTimestampedFileName('diff'));
                 }
             } catch {
                 // 檔案不存在，檢查是否沒有副檔名
                 if (path.extname(resolvedPath) === '') {
                     // ✅ 可能是目錄，使用時間戳檔案名
-                    resolvedPath = path.join(resolvedPath, getTimestampedFileName());
+                    resolvedPath = path.join(resolvedPath, getTimestampedFileName('diff'));
                 }
             }
             
@@ -373,6 +441,51 @@ export const App = () => {
             });
 
             setExportStatus(`✓ Exported to ${path.basename(resolvedPath)}`);
+            setTimeout(() => setExportStatus(''), 3000);
+        } catch (error) {
+            setExportStatus(`✗ Export failed: ${error}`);
+            setTimeout(() => setExportStatus(''), 3000);
+        }
+    };
+
+    // 匯出檔案概覽（支援自訂路徑）
+    const handleExportOverview = async (outputPath: string) => {
+        try {
+            const path = await import('path');
+            const fs = await import('fs');
+            const fsPromises = await import('fs/promises');
+            
+            // 解析路徑
+            let resolvedPath = path.isAbsolute(outputPath) 
+                ? outputPath 
+                : path.resolve(process.cwd(), outputPath);
+            
+            // 檢查是否為目錄
+            try {
+                const stat = fs.statSync(resolvedPath);
+                if (stat.isDirectory()) {
+                    resolvedPath = path.join(resolvedPath, getTimestampedFileName('files_overview'));
+                }
+            } catch {
+                if (path.extname(resolvedPath) === '') {
+                    resolvedPath = path.join(resolvedPath, getTimestampedFileName('files_overview'));
+                }
+            }
+            
+            // 確保目錄存在
+            const dir = path.dirname(resolvedPath);
+            await fsPromises.mkdir(dir, { recursive: true });
+            
+            // 顯示處理中狀態
+            setExportStatus('Generating overview...');
+            
+            // 生成概覽內容
+            const overview = await generateFileOverview();
+            
+            // 寫入檔案
+            await fsPromises.writeFile(resolvedPath, overview, 'utf8');
+
+            setExportStatus(`✓ Overview exported to ${path.basename(resolvedPath)}`);
             setTimeout(() => setExportStatus(''), 3000);
         } catch (error) {
             setExportStatus(`✗ Export failed: ${error}`);
@@ -430,7 +543,7 @@ export const App = () => {
     // 鍵盤操作
     useInput((input, key) => {
         // ============ 路徑輸入模式 ============
-        if (inputMode === 'export-path') {
+        if (inputMode === 'export-path' || inputMode === 'export-overview') {
             // ESC: 取消輸入
             if (key.escape) {
                 setInputMode('normal');
@@ -442,9 +555,21 @@ export const App = () => {
             // Enter: 確認匯出
             if (key.return) {
                 setInputMode('normal');
-                // ✅ 使用時間戳檔案名
-                const finalPath = pathInput.trim() === '' ? `./${getTimestampedFileName()}` : pathInput;
-                handleExportMultiple(finalPath);
+                
+                if (inputMode === 'export-path') {
+                    // 匯出 diff
+                    const finalPath = pathInput.trim() === '' 
+                        ? `./${getTimestampedFileName('diff')}` 
+                        : pathInput;
+                    handleExportMultiple(finalPath);
+                } else {
+                    // 匯出概覽
+                    const finalPath = pathInput.trim() === '' 
+                        ? `./${getTimestampedFileName('files_overview')}` 
+                        : pathInput;
+                    handleExportOverview(finalPath);
+                }
+                
                 setPathInput(''); // ✅ 重置為空
                 setCursorPosition(0);
                 return;
@@ -688,6 +813,20 @@ export const App = () => {
             return;
         }
 
+        // 'f' (小寫): 快速匯出檔案概覽到當前目錄
+        if (input === 'f') {
+            handleExportOverview(`./${getTimestampedFileName('files_overview')}`);
+            return;
+        }
+
+        // 'F' (大寫): 匯出檔案概覽並選擇路徑
+        if (input === 'F') {
+            setInputMode('export-overview');
+            setPathInput('');
+            setCursorPosition(0);
+            return;
+        }
+
         // 'e': 匯出當前檔案 diff（保持原邏輯）
         if (input === 'e') {
             handleExportSingle();
@@ -708,7 +847,7 @@ export const App = () => {
 
     return (
         <Box width="100%" height={adjustedRows} flexDirection="column">
-            {inputMode === 'export-path' ? (
+            {(inputMode === 'export-path' || inputMode === 'export-overview') ? (
                 // ===== 路徑輸入模式（全屏替換） =====
                 <Box flexDirection="column" height="100%" justifyContent="center" alignItems="center">
                     <Box
@@ -719,7 +858,9 @@ export const App = () => {
                         paddingY={1}
                         width={Math.min(80, columns - 4)}
                     >
-                        <Text bold color="cyan">Export Diff to File</Text>
+                        <Text bold color="cyan">
+                            {inputMode === 'export-path' ? 'Export Diff to File' : 'Export File Overview'}
+                        </Text>
                         
                         {/* ✅ 完全重寫：使用單一 Text 組件 */}
                         <Box marginTop={1}>
@@ -735,10 +876,13 @@ export const App = () => {
                                     
                                     // 如果路徑為空，顯示提示
                                     if (pathInput.length === 0) {
+                                        const defaultName = inputMode === 'export-path' 
+                                            ? 'diff_YYYYMMDD_HHMMSS.txt'
+                                            : 'files_overview_YYYYMMDD_HHMMSS.txt';
                                         return (
                                             <>
                                                 <Text inverse> </Text>
-                                                <Text dimColor> (default: diff_YYYYMMDD_HHMMSS.txt)</Text>
+                                                <Text dimColor> (default: {defaultName})</Text>
                                             </>
                                         );
                                     }
@@ -755,7 +899,11 @@ export const App = () => {
                         </Box>
 
                         <Box marginTop={1}>
-                            <Text color="yellow">{selectedPaths.size} file(s) selected</Text>
+                            <Text color="yellow">
+                                {inputMode === 'export-path' 
+                                    ? `${selectedPaths.size} file(s) selected`
+                                    : 'All Git tracked files'}
+                            </Text>
                         </Box>
 
                         <Box marginTop={1} borderStyle="single" borderColor="gray" paddingX={1}>
@@ -846,7 +994,7 @@ export const App = () => {
                                     <Text color="green">{exportStatus}</Text>
                                 ) : (
                                     <Text dimColor>
-                                        e:Export E:ExportAll Spc:Select a:All /:Mode {viewMode === 'tree' && 'Enter:Toggle'} q:Quit
+                                        e:Export E:ExportAll f:Overview F:OverviewTo Spc:Select a:All /:Mode {viewMode === 'tree' && 'Enter:Toggle'} q:Quit
                                     </Text>
                                 )}
                             </Text>
