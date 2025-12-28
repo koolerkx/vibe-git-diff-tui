@@ -1,13 +1,50 @@
 {
+  "name": "git-diff-tui",
+  "version": "1.0.0",
+  "description": "tui app export git diff as file for web chat LLM context by vibe coding",
   "type": "module",
+  "main": "./dist/cli.js",
+  "bin": {
+    "git-diff-tui": "./dist/cli.js",
+    "gdt": "./dist/cli.js",
+    "gd": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "tsx src/cli.tsx",
-    "build": "tsc",
-    "start": "node dist/cli.js"
+    "build": "tsc && node scripts/chmod.js",
+    "start": "node dist/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "git",
+    "diff",
+    "tui",
+    "cli",
+    "terminal",
+    "interactive",
+    "code-export",
+    "git-diff",
+    "git-tui"
+  ],
+  "author": "koolerkx",
+  "license": "Unlicense",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/koolerkx/vibe-git-diff-tui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/koolerkx/vibe-git-diff-tui/issues"
+  },
+  "homepage": "https://github.com/koolerkx/vibe-git-diff-tui#readme",
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "execa": "9.6.1",
-    "ink": "6.6.0",
+    "ink": "^6.6.0",
     "react": "19.2.3"
   },
   "devDependencies": {
