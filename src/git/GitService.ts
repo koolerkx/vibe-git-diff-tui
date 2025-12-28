@@ -104,6 +104,151 @@ export class GitService {
     });
     return stdout;
   }
+
+  // 匯出單一檔案 diff
+  async exportDiff(options: {
+    path: string;
+    staged: boolean;
+    outputPath: string;
+    status?: string;
+  }): Promise<void> {
+    const { path, staged, outputPath, status } = options;
+    
+    const isUntracked = status === '??' || status === '?';
+    
+    let diffContent: string;
+    
+    if (!staged && isUntracked) {
+      // 處理 Untracked 檔案
+      try {
+        // 使用 /dev/null 或 NUL (Windows)
+        const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
+        const { stdout, exitCode } = await execa(this.gitBin, [
+          'diff',
+          '--no-color',
+          '--no-index',
+          '--',
+          nullPath,
+          path
+        ], {
+          cwd: this.cwd,
+          reject: false,
+          stripFinalNewline: false,
+        });
+        
+        // Exit code 0 (無差異) 或 1 (有差異) 都是正常的
+        if (exitCode === 0 || exitCode === 1) {
+          diffContent = stdout;
+        } else {
+          throw new Error(`git diff exited with code ${exitCode}`);
+        }
+      } catch (e) {
+        throw new Error(`Error generating untracked diff: ${e}`);
+      }
+    } else {
+      // 一般 Staged / Modified 邏輯
+      const args = ['diff', '--no-color'];
+      if (staged) {
+        args.push('--cached');
+      }
+      args.push('--', path);
+      
+      try {
+        diffContent = await this.runGit(args, { stripFinalNewline: false });
+      } catch (error) {
+        throw new Error(`Diff failed: ${error}`);
+      }
+    }
+    
+    // 寫入檔案
+    await fs.writeFile(outputPath, diffContent, 'utf8');
+  }
+
+  // 匯出多檔合併 diff
+  async exportMultipleDiffs(options: {
+    paths: Array<{ path: string; staged: boolean; status?: string }>;
+    outputPath: string;
+  }): Promise<void> {
+    const { paths, outputPath } = options;
+    
+    if (paths.length === 0) {
+      // 如果沒有檔案，建立空檔案
+      await fs.writeFile(outputPath, '', 'utf8');
+      return;
+    }
+    
+    // 更智能的分組處理：先分離 tracked 和 untracked
+    const untrackedPaths = paths.filter(p => p.status === '??' || p.status === '?');
+    const trackedPaths = paths.filter(p => p.status !== '??' && p.status !== '?');
+    
+    // 從 tracked 中分離 staged 和 unstaged
+    const stagedPaths = trackedPaths.filter(p => p.staged).map(p => p.path);
+    const unstagedPaths = trackedPaths.filter(p => !p.staged).map(p => p.path);
+    
+    // 清空輸出檔案
+    await fs.writeFile(outputPath, '', 'utf8');
+    
+    const parts: string[] = [];
+    
+    // 1. Unstaged tracked files
+    if (unstagedPaths.length > 0) {
+      try {
+        const args = ['diff', '--no-color', '--'];
+        args.push(...unstagedPaths);
+        const diffContent = await this.runGit(args, { stripFinalNewline: false });
+        if (diffContent) {
+          parts.push(diffContent);
+        }
+      } catch (error) {
+        parts.push(`(Error exporting unstaged files: ${error})`);
+      }
+    }
+    
+    // 2. Staged files
+    if (stagedPaths.length > 0) {
+      try {
+        const args = ['diff', '--no-color', '--cached', '--'];
+        args.push(...stagedPaths);
+        const diffContent = await this.runGit(args, { stripFinalNewline: false });
+        if (diffContent) {
+          parts.push(diffContent);
+        }
+      } catch (error) {
+        parts.push(`(Error exporting staged files: ${error})`);
+      }
+    }
+    
+    // 3. Untracked files（需要單獨處理，使用 --no-index）
+    if (untrackedPaths.length > 0) {
+      const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
+      for (const { path: filePath } of untrackedPaths) {
+        try {
+          const { stdout, exitCode } = await execa(this.gitBin, [
+            'diff',
+            '--no-color',
+            '--no-index',
+            '--',
+            nullPath,
+            filePath
+          ], {
+            cwd: this.cwd,
+            reject: false,
+            stripFinalNewline: false,
+          });
+          
+          if ((exitCode === 0 || exitCode === 1) && stdout) {
+            parts.push(stdout);
+          }
+        } catch (error) {
+          parts.push(`(Error exporting untracked file ${filePath}: ${error})`);
+        }
+      }
+    }
+    
+    // 合併所有內容
+    const finalContent = parts.join('\n\n');
+    await fs.writeFile(outputPath, finalContent, 'utf8');
+  }
 }
 
 // ---- parser ----
