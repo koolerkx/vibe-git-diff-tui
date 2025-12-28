@@ -65,6 +65,29 @@ export class GitService {
     }
   }
 
+  /**
+   * 獲取所有檔案（包括 untracked），但排除 .gitignore 的檔案
+   */
+  async getAllFiles(): Promise<string[]> {
+    try {
+      // 獲取所有追蹤的檔案
+      const tracked = await this.runGit(['ls-files']);
+      
+      // 獲取所有未追蹤的檔案（排除 gitignore）
+      const untracked = await this.runGit(['ls-files', '--others', '--exclude-standard']);
+      
+      const allFiles = [
+        ...tracked.trim().split('\n').filter(line => line.length > 0),
+        ...untracked.trim().split('\n').filter(line => line.length > 0)
+      ];
+      
+      // 去重並排序
+      return Array.from(new Set(allFiles)).sort();
+    } catch (error) {
+      throw new Error(`Failed to get all files: ${error}`);
+    }
+  }
+
   async getDiff(args: { staged: boolean; path: string; status?: string }): Promise<string> {
     const isUntracked = args.status === '?' || args.status === '??';
 

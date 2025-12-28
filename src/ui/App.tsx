@@ -9,6 +9,18 @@ const git = new GitService({ cwd: process.cwd() });
 // 固定捲動單位（行數）
 const SCROLL_LINES = 15;
 
+// C++ 副檔名定義（僅用於合併）
+const HEADER_EXTENSIONS = ['.h', '.hpp', '.hxx', '.hh'];
+const SOURCE_EXTENSIONS = ['.cpp', '.cxx', '.cc', '.c'];
+
+// 檔案配對類型
+type FilePair = {
+    baseName: string;
+    dirPath: string;
+    header: string | null;
+    source: string | null;
+};
+
 // 統一列表項目類型
 type ListItem = 
   | { type: 'group'; label: string; count: number }
@@ -18,8 +30,11 @@ type ListItem =
 // 顯示模式
 type ViewMode = 'flat' | 'tree';
 
+// 程式碼 dump 輸出模式
+type DumpMode = 'tree' | 'flat';
+
 // 輸入模式
-type InputMode = 'normal' | 'export-path' | 'export-overview';
+type InputMode = 'normal' | 'export-path' | 'export-overview' | 'export-code-dump';
 
 // 樹狀節點型別
 type TreeNode = {
@@ -72,6 +87,20 @@ function getTimestampedFileName(prefix: string = 'diff'): string {
     return `${prefix}_${year}${month}${day}_${hours}${minutes}${seconds}.txt`;
 }
 
+// 生成帶時間戳的目錄名
+function getTimestampedDirName(prefix: string = 'code_dump'): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    
+    // 格式: code_dump_20251228_215530
+    return `${prefix}_${year}${month}${day}_${hours}${minutes}${seconds}`;
+}
+
 // 檔案大小格式化函數
 function formatFileSize(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -81,13 +110,13 @@ function formatFileSize(bytes: number): string {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-// 生成檔案概覽（所有 Git 管理的檔案）
+// 生成檔案概覽（所有檔案，包括 untracked）
 async function generateFileOverview(): Promise<string> {
     const path = await import('path');
     const fs = await import('fs');
     
-    // 獲取所有 Git 追蹤的檔案
-    const allFiles = await git.getAllTrackedFiles();
+    // ✅ 獲取所有檔案（包括 untracked，排除 gitignore）
+    const allFiles = await git.getAllFiles();
     
     // 按目錄分組
     const grouped = new Map<string, Array<{ name: string; size: number }>>();
@@ -138,6 +167,224 @@ async function generateFileOverview(): Promise<string> {
     }
     
     return output;
+}
+
+// 生成合併的程式碼庫
+async function generateMergedCodebase(mode: DumpMode): Promise<Map<string, string>> {
+    const path = await import('path');
+    const fs = await import('fs');
+    
+    // ✅ 獲取所有檔案（包括 untracked，排除 gitignore）
+    const allFiles = await git.getAllFiles();
+    
+    // 分類檔案
+    const headers: string[] = [];
+    const sources: string[] = [];
+    const otherFiles: string[] = [];
+    
+    for (const file of allFiles) {
+        const ext = path.extname(file).toLowerCase();
+        
+        if (HEADER_EXTENSIONS.includes(ext)) {
+            headers.push(file);
+        } else if (SOURCE_EXTENSIONS.includes(ext)) {
+            sources.push(file);
+        } else {
+            // ✅ 所有其他檔案都保留（js, ts, hlsl, txt, 等等）
+            otherFiles.push(file);
+        }
+    }
+    
+    // 建立檔案配對映射
+    const pairMap = new Map<string, FilePair>();
+    
+    // 處理 headers
+    for (const headerPath of headers) {
+        const dir = path.dirname(headerPath);
+        const baseName = path.basename(headerPath, path.extname(headerPath));
+        const key = `${dir}|${baseName}`;
+        
+        if (!pairMap.has(key)) {
+            pairMap.set(key, {
+                baseName,
+                dirPath: dir,
+                header: headerPath,
+                source: null,
+            });
+        }
+    }
+    
+    // 配對 sources
+    const unmatchedSources: string[] = [];
+    for (const sourcePath of sources) {
+        const dir = path.dirname(sourcePath);
+        const baseName = path.basename(sourcePath, path.extname(sourcePath));
+        const key = `${dir}|${baseName}`;
+        
+        if (pairMap.has(key)) {
+            pairMap.get(key)!.source = sourcePath;
+        } else {
+            // ✅ 獨立的 .cpp 也要匯出（沒有對應 header）
+            unmatchedSources.push(sourcePath);
+        }
+    }
+    
+    // 生成合併檔案內容
+    const outputFiles = new Map<string, string>();
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    
+    // 處理配對的 C++ 檔案
+    for (const [key, pair] of pairMap) {
+        const { baseName, dirPath, header, source } = pair;
+        
+        const outputFileName = mode === 'flat'
+            ? `${dirPath === '.' ? '' : dirPath.replace(/[/\\]/g, '_') + '_'}${baseName}_merged.cpp`
+            : `${dirPath}/${baseName}_merged.cpp`;
+        
+        let content = '';
+        content += '// ============================================================================\n';
+        content += `// 合併檔案: ${baseName}\n`;
+        content += `// 原始路徑: ${dirPath}\n`;
+        content += `// 合併時間: ${timestamp}\n`;
+        content += `// 輸出模式: ${mode === 'flat' ? '扁平化' : '目錄結構'}\n`;
+        
+        if (header && source) {
+            // 合併 header 和 source
+            content += `// Header: ${path.basename(header)}\n`;
+            content += `// Source: ${path.basename(source)}\n`;
+            content += '// ============================================================================\n\n';
+            content += `// -------------------- Header File: ${path.basename(header)} --------------------\n\n`;
+            
+            try {
+                const headerContent = fs.readFileSync(path.join(process.cwd(), header), 'utf8');
+                content += headerContent;
+            } catch (error) {
+                content += `// Error reading header: ${error}\n`;
+            }
+            
+            content += '\n\n';
+            content += `// -------------------- Source File: ${path.basename(source)} --------------------\n\n`;
+            
+            try {
+                const sourceContent = fs.readFileSync(path.join(process.cwd(), source), 'utf8');
+                content += sourceContent;
+            } catch (error) {
+                content += `// Error reading source: ${error}\n`;
+            }
+        } else if (header) {
+            // 只有 header
+            content += `// Header: ${path.basename(header)}\n`;
+            content += '// Source: (無對應的 source 檔案)\n';
+            content += '// ============================================================================\n\n';
+            
+            try {
+                const headerContent = fs.readFileSync(path.join(process.cwd(), header), 'utf8');
+                content += headerContent;
+            } catch (error) {
+                content += `// Error reading header: ${error}\n`;
+            }
+        } else if (source) {
+            // 只有 source
+            content += `// Header: (無對應的 header 檔案)\n`;
+            content += `// Source: ${path.basename(source)}\n`;
+            content += '// ============================================================================\n\n';
+            
+            try {
+                const sourceContent = fs.readFileSync(path.join(process.cwd(), source), 'utf8');
+                content += sourceContent;
+            } catch (error) {
+                content += `// Error reading source: ${error}\n`;
+            }
+        }
+        
+        outputFiles.set(outputFileName, content);
+    }
+    
+    // ✅ 處理獨立的 source 檔案（沒有對應 header 的 .cpp）
+    for (const sourcePath of unmatchedSources) {
+        const dir = path.dirname(sourcePath);
+        const baseName = path.basename(sourcePath);
+        
+        const outputFileName = mode === 'flat'
+            ? `${dir === '.' ? '' : dir.replace(/[/\\]/g, '_') + '_'}${baseName}`
+            : `${dir}/${baseName}`;
+        
+        let content = '';
+        content += '// ============================================================================\n';
+        content += `// 獨立檔案: ${baseName}\n`;
+        content += `// 原始路徑: ${dir}\n`;
+        content += `// 匯出時間: ${timestamp}\n`;
+        content += '// ============================================================================\n\n';
+        
+        try {
+            const fileContent = fs.readFileSync(path.join(process.cwd(), sourcePath), 'utf8');
+            content += fileContent;
+        } catch (error) {
+            content += `// Error reading file: ${error}\n`;
+        }
+        
+        outputFiles.set(outputFileName, content);
+    }
+    
+    // ✅ 處理所有其他檔案（js, ts, hlsl, txt, json, 等等）
+    for (const filePath of otherFiles) {
+        const dir = path.dirname(filePath);
+        const fileName = path.basename(filePath);
+        
+        const outputFileName = mode === 'flat'
+            ? `${dir === '.' ? '' : dir.replace(/[/\\]/g, '_') + '_'}${fileName}`
+            : `${dir}/${fileName}`;
+        
+        let content = '';
+        
+        try {
+            const fileContent = fs.readFileSync(path.join(process.cwd(), filePath), 'utf8');
+            content = fileContent;
+        } catch (error) {
+            content = `// Error reading file: ${error}\n`;
+        }
+        
+        outputFiles.set(outputFileName, content);
+    }
+    
+    return outputFiles;
+}
+
+// 生成匯出摘要
+function generateDumpSummary(files: Map<string, string>, outputDir: string, mode: DumpMode): string {
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    
+    let summary = '';
+    summary += '='.repeat(80) + '\n';
+    summary += 'Code Dump Summary\n';
+    summary += '='.repeat(80) + '\n\n';
+    summary += `Export Time: ${timestamp}\n`;
+    summary += `Source Directory: ${process.cwd()}\n`;
+    summary += `Output Directory: ${outputDir}\n`;
+    summary += `Output Mode: ${mode === 'flat' ? 'Flattened' : 'Directory Tree'}\n\n`;
+    summary += `Statistics:\n`;
+    summary += `  - Total Files: ${files.size}\n\n`;
+    summary += '='.repeat(80) + '\n';
+    summary += 'File List\n';
+    summary += '='.repeat(80) + '\n\n';
+    
+    const sortedFiles = Array.from(files.keys()).sort();
+    for (const fileName of sortedFiles) {
+        summary += `  ${fileName}\n`;
+    }
+    
+    summary += '\n' + '='.repeat(80) + '\n';
+    if (mode === 'flat') {
+        summary += 'Note: In flat mode, path information is encoded in filenames\n';
+        summary += '      Path separators \'/\' and \'\\\' are replaced with \'_\'\n';
+    } else {
+        summary += 'Note: Directory structure is preserved\n';
+    }
+    summary += '='.repeat(80) + '\n';
+    
+    return summary;
 }
 
 // 自製 Hook：取得終端機寬高
@@ -246,6 +493,9 @@ export const App = () => {
 
     // 顯示模式
     const [viewMode, setViewMode] = useState<ViewMode>('flat');
+
+    // 程式碼 dump 輸出模式
+    const [dumpMode, setDumpMode] = useState<DumpMode>('tree');
 
     // 追蹤目錄收合狀態
     const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
@@ -493,6 +743,66 @@ export const App = () => {
         }
     };
 
+    // 匯出合併的程式碼庫
+    const handleExportCodeDump = async (outputPath: string, mode: DumpMode) => {
+        try {
+            const path = await import('path');
+            const fs = await import('fs');
+            const fsPromises = await import('fs/promises');
+            
+            // ✅ 解析基礎路徑
+            let basePath = '';
+            if (outputPath.trim() === '') {
+                // 空路徑：使用當前目錄
+                basePath = process.cwd();
+            } else {
+                // 有輸入路徑
+                basePath = path.isAbsolute(outputPath) 
+                    ? outputPath 
+                    : path.resolve(process.cwd(), outputPath);
+            }
+            
+            // ✅ 建立帶時間戳的目錄（兩種模式都一樣，不再建立額外的 dump 子資料夾）
+            const timestampedDir = getTimestampedDirName('code_dump');
+            const resolvedPath = path.join(basePath, timestampedDir);
+            
+            // 確保目錄存在
+            await fsPromises.mkdir(resolvedPath, { recursive: true });
+            
+            // 顯示處理中狀態
+            setExportStatus('Generating code dump...');
+            
+            // 生成合併檔案
+            const mergedFiles = await generateMergedCodebase(mode);
+            
+            // 寫入所有檔案
+            let count = 0;
+            for (const [fileName, content] of mergedFiles) {
+                const filePath = path.join(resolvedPath, fileName);
+                
+                // 確保子目錄存在（目錄結構模式需要）
+                const fileDir = path.dirname(filePath);
+                await fsPromises.mkdir(fileDir, { recursive: true });
+                
+                await fsPromises.writeFile(filePath, content, 'utf8');
+                count++;
+            }
+            
+            // ✅ 生成摘要檔案（直接放在時間戳目錄的根目錄）
+            const summaryPath = path.join(resolvedPath, 'dump_summary.txt');
+            const summary = generateDumpSummary(mergedFiles, resolvedPath, mode);
+            await fsPromises.writeFile(summaryPath, summary, 'utf8');
+            
+            // 顯示相對路徑
+            const displayPath = path.relative(process.cwd(), resolvedPath);
+            setExportStatus(`✓ Dumped ${count} files to ${displayPath}/`);
+            setTimeout(() => setExportStatus(''), 3000);
+        } catch (error) {
+            setExportStatus(`✗ Export failed: ${error}`);
+            setTimeout(() => setExportStatus(''), 3000);
+        }
+    };
+
     // 計算版面高度 (扣除 Header/Footer/Borders)
     const isWarp = process.env.TERM_PROGRAM === 'WarpTerminal';
     const adjustedRows = isWarp ? Math.max(10, (rows || 24) - 1) : (rows || 24);
@@ -543,12 +853,18 @@ export const App = () => {
     // 鍵盤操作
     useInput((input, key) => {
         // ============ 路徑輸入模式 ============
-        if (inputMode === 'export-path' || inputMode === 'export-overview') {
+        if (inputMode === 'export-path' || inputMode === 'export-overview' || inputMode === 'export-code-dump') {
             // ESC: 取消輸入
             if (key.escape) {
                 setInputMode('normal');
                 setPathInput(''); // ✅ 重置為空
                 setCursorPosition(0);
+                return;
+            }
+
+            // ✅ Tab: 切換 dump 模式（僅在 code-dump 模式）
+            if (key.tab && inputMode === 'export-code-dump') {
+                setDumpMode(prev => prev === 'flat' ? 'tree' : 'flat');
                 return;
             }
 
@@ -562,12 +878,16 @@ export const App = () => {
                         ? `./${getTimestampedFileName('diff')}` 
                         : pathInput;
                     handleExportMultiple(finalPath);
-                } else {
+                } else if (inputMode === 'export-overview') {
                     // 匯出概覽
                     const finalPath = pathInput.trim() === '' 
                         ? `./${getTimestampedFileName('files_overview')}` 
                         : pathInput;
                     handleExportOverview(finalPath);
+                } else if (inputMode === 'export-code-dump') {
+                    // 匯出程式碼 dump
+                    const finalPath = pathInput.trim();
+                    handleExportCodeDump(finalPath, dumpMode);
                 }
                 
                 setPathInput(''); // ✅ 重置為空
@@ -827,6 +1147,15 @@ export const App = () => {
             return;
         }
 
+        // 'D': 匯出程式碼 dump
+        if (input === 'D') {
+            setInputMode('export-code-dump');
+            setDumpMode('tree'); // ✅ 預設為目錄結構模式
+            setPathInput('');
+            setCursorPosition(0);
+            return;
+        }
+
         // 'e': 匯出當前檔案 diff（保持原邏輯）
         if (input === 'e') {
             handleExportSingle();
@@ -847,7 +1176,7 @@ export const App = () => {
 
     return (
         <Box width="100%" height={adjustedRows} flexDirection="column">
-            {(inputMode === 'export-path' || inputMode === 'export-overview') ? (
+            {(inputMode === 'export-path' || inputMode === 'export-overview' || inputMode === 'export-code-dump') ? (
                 // ===== 路徑輸入模式（全屏替換） =====
                 <Box flexDirection="column" height="100%" justifyContent="center" alignItems="center">
                     <Box
@@ -859,8 +1188,21 @@ export const App = () => {
                         width={Math.min(80, columns - 4)}
                     >
                         <Text bold color="cyan">
-                            {inputMode === 'export-path' ? 'Export Diff to File' : 'Export File Overview'}
+                            {inputMode === 'export-path' && 'Export Diff to File'}
+                            {inputMode === 'export-overview' && 'Export File Overview'}
+                            {inputMode === 'export-code-dump' && 'Export Code Dump'}
                         </Text>
+                        
+                        {/* ✅ 顯示當前 dump 模式 */}
+                        {inputMode === 'export-code-dump' && (
+                            <Box marginTop={1}>
+                                <Text dimColor>Mode: </Text>
+                                <Text color="yellow">
+                                    {dumpMode === 'flat' ? '扁平化 (Flat)' : '目錄結構 (Tree)'}
+                                </Text>
+                                <Text dimColor> - Press Tab to switch</Text>
+                            </Box>
+                        )}
                         
                         {/* ✅ 完全重寫：使用單一 Text 組件 */}
                         <Box marginTop={1}>
@@ -876,9 +1218,14 @@ export const App = () => {
                                     
                                     // 如果路徑為空，顯示提示
                                     if (pathInput.length === 0) {
-                                        const defaultName = inputMode === 'export-path' 
-                                            ? 'diff_YYYYMMDD_HHMMSS.txt'
-                                            : 'files_overview_YYYYMMDD_HHMMSS.txt';
+                                        let defaultName = '';
+                                        if (inputMode === 'export-path') defaultName = 'diff_YYYYMMDD_HHMMSS.txt';
+                                        else if (inputMode === 'export-overview') defaultName = 'files_overview_YYYYMMDD_HHMMSS.txt';
+                                        else if (inputMode === 'export-code-dump') {
+                                            // ✅ 兩種模式都是同一個目錄，只是內部結構不同
+                                            defaultName = './code_dump_YYYYMMDD_HHMMSS/';
+                                        }
+                                        
                                         return (
                                             <>
                                                 <Text inverse> </Text>
@@ -900,15 +1247,26 @@ export const App = () => {
 
                         <Box marginTop={1}>
                             <Text color="yellow">
-                                {inputMode === 'export-path' 
-                                    ? `${selectedPaths.size} file(s) selected`
-                                    : 'All Git tracked files'}
+                                {inputMode === 'export-path' && `${selectedPaths.size} file(s) selected`}
+                                {inputMode === 'export-overview' && 'All Git tracked files'}
+                                {inputMode === 'export-code-dump' && 'Merge C++ & export all files'}
                             </Text>
                         </Box>
 
+                        {/* ✅ 額外提示：會建立時間戳子目錄 */}
+                        {inputMode === 'export-code-dump' && pathInput.length > 0 && (
+                            <Box marginTop={1}>
+                                <Text dimColor>
+                                    → Will create: {pathInput}/code_dump_YYYYMMDD_HHMMSS/
+                                </Text>
+                            </Box>
+                        )}
+
                         <Box marginTop={1} borderStyle="single" borderColor="gray" paddingX={1}>
                             <Text dimColor>
-                                Enter: Export  |  Ctrl-V: Paste  |  Ctrl-U: Clear  |  Esc: Cancel
+                                Enter: Export  |  
+                                {inputMode === 'export-code-dump' && ' Tab: Switch Mode  |  '}
+                                Ctrl-V: Paste  |  Ctrl-U: Clear  |  Esc: Cancel
                             </Text>
                         </Box>
                     </Box>
@@ -994,7 +1352,7 @@ export const App = () => {
                                     <Text color="green">{exportStatus}</Text>
                                 ) : (
                                     <Text dimColor>
-                                        e:Export E:ExportAll f:Overview F:OverviewTo Spc:Select a:All /:Mode {viewMode === 'tree' && 'Enter:Toggle'} q:Quit
+                                        e:Export E:ExportAll D:CodeDump f:Overview F:OverviewTo Spc:Select a:All /:Mode {viewMode === 'tree' && 'Enter:Toggle'} q:Quit
                                     </Text>
                                 )}
                             </Text>
