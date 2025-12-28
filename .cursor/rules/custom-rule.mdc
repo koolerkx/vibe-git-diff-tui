@@ -1,0 +1,118 @@
+---
+alwaysApply: true
+---
+
+# Project: git-diff TUI exporter
+
+## Tech stack & Environment
+- **Runtime:** Node.js (LTS).
+- **Language:** TypeScript (Strict mode enabled).
+- **UI Framework:** [Ink](https://github.com/vadimdemedes/ink) (React-based terminal UI).
+- **Git Integration:** Use native `git` commands via `node:child_process` or `execa`. Do not use heavy Git library bindings (like `nodegit`).
+- **Package Manager:** npm.
+
+---
+
+## Core Philosophy
+
+This tool is a **Read-Only / Export-Focused** Git TUI (similar to lazygit but simplified).
+**Primary Goal:** View files and commits, filter changes, and **export diffs to text files**.
+
+**AI Behavior Constraints:**
+- Do **NOT** implement write-operations like `git commit`, `git push`, `git merge`, or `git rebase`.
+- Focus entirely on **viewing logs**, **selecting diffs**, and **generating text outputs**.
+- Keep the UI responsive; fetch Git data asynchronously.
+
+---
+
+## Architecture Guidelines
+
+### 1. GitService Layer (Data)
+Isolate all `git` command executions here.
+- **Commands:**
+  - File Tree: `git ls-files --others --exclude-standard --cached` (respects gitignore).
+  - Unstaged: `git diff --name-status -z`.
+  - Staged: `git diff --cached --name-status -z`.
+  - Log: `git log --pretty=format:"%h|%an|%s|%ad" --date=short` (parse this output).
+  - Content: `git show`, `git diff`.
+- **Formatting:** Always use `--no-color` for internal data processing and file exports.
+
+### 2. Domain Models
+Define strict interfaces:
+- `FileNode`: `{ path: string, children: FileNode[] }`
+- `ChangeItem`: `{ path: string, status: 'M'|'A'|'D'|'R', staged: boolean }`
+- `CommitItem`: `{ hash: string, author: string, message: string, date: string }`
+
+### 3. Ink UI Layer (View)
+- Use functional React components with Hooks (`useState`, `useEffect`, `useInput`).
+- **Layout:** Use `<Box>` for 3-pane layout (Left: Tree/Nav, Center: List, Right: Preview).
+- **State Management:** Manage selection sets (`Set<string>`) locally or via Context.
+
+---
+
+## Feature Specifications
+
+### Mode A: Working Directory (Status)
+- **Views:** Toggle between `Unstaged` and `Staged` lists.
+- **Selection:** Multi-select files using `Space`.
+- **Preview:** Show live diff of the currently focused file.
+
+### Mode B: Commit History (Log)
+- **Views:** List of recent commits (scrolling).
+- **Selection:**
+  - Single commit selection.
+  - Multi-select commits (arbitrary or range) using `Space`.
+- **Preview:** Show the diff/details of the currently focused commit.
+
+### Interaction & Keys
+- `Tab`: Switch between Unstaged / Staged / Commit History modes.
+- `Up` / `Down`: Navigation.
+- `Space`: Toggle selection (multi-select).
+- `Enter`: Expand/Focus details.
+- `e`: Trigger **Export Action**.
+
+---
+
+## Export Logic (Crucial)
+
+When the user triggers an export, follow these rules strictly to generate clean `.txt` files.
+
+### 1. Exporting Working Changes (Files)
+- **Single File:**
+  - Cmd: `git diff --no-color -- <path>` (or `--cached` if staged).
+- **Multiple Files:**
+  - Cmd: `git diff --no-color -- <path1> <path2> ...`
+  - Output: A single `.txt` file containing the combined diff.
+
+### 2. Exporting Commits
+- **Single Commit:**
+  - Cmd: `git show --no-color <hash>`
+- **Multiple Continuous Commits (Range):**
+  - Cmd: `git diff --no-color <oldest_parent_hash> <newest_hash>`
+- **Multiple Discontinuous Commits (Selection):**
+  - logic: Iterate through selected hashes, call `git show --no-color <hash>`, and concatenate the strings.
+  - **Formatting:** Insert a header between commits in the output file:
+    ```
+    ===================================================================
+    Commit: <hash> - <message>
+    ===================================================================
+    <git show output>
+    ```
+
+---
+
+## Coding Standards
+
+1.  **Strict Typing:** No `any`. Define interfaces for all Git parsing results.
+2.  **Error Handling:**
+    - Check if the current directory is a git repo on startup.
+    - If `git` command fails (e.g., binary file), show a graceful UI message ("Binary file not shown") rather than crashing.
+3.  **Performance:**
+    - Do not load full diffs for the entire file list at once. Only fetch the diff for the *focused* item (Lazy loading).
+4.  **Path Handling:**
+    - Use Node's `path` module. Handle spaces in filenames correctly when spawning shell commands.
+
+## What NOT to do
+- Do not build file editing features (like VIM mode inside the TUI).
+- Do not build branch switching or remote syncing mechanisms.
+- Do not use colored output in the exported `.txt` files.
