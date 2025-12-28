@@ -1,6 +1,6 @@
 {
   "name": "git-diff-tui",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "tui app export git diff as file for web chat LLM context by vibe coding",
   "type": "module",
   "main": "./dist/cli.js",
