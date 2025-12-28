@@ -6,6 +6,7 @@
     "start": "node dist/cli.js"
   },
   "dependencies": {
+    "execa": "9.6.1",
     "ink": "6.6.0",
     "react": "19.2.3"
   },
