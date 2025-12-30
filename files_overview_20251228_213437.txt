@@ -1,0 +1,21 @@
+[.]
+  - .gitignore (2.12 KB)
+  - package.json (367 B)
+  - tracked.txt (9 B)
+  - tsconfig.json (1.32 KB)
+  - yarn.lock (30.32 KB)
+
+[.cursor/rules]
+  - custom-rule.mdc (4.44 KB)
+
+[src]
+  - cli.tsx (1.02 KB)
+  - devTest.ts (1.37 KB)
+
+[src/git]
+  - GitService.ts (9.48 KB)
+  - types.ts (299 B)
+
+[src/ui]
+  - App.tsx (39.89 KB)
+

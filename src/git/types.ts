@@ -8,3 +8,10 @@ export type GitChange = {
   oldPath?: string;
 };
 
+export type CommitItem = {
+  hash: string;
+  author: string;
+  message: string;
+  date: string;
+};
+

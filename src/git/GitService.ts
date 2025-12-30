@@ -1,7 +1,7 @@
 import { execa } from 'execa';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { GitChange, GitChangeStatus } from './types.js';
+import type { GitChange, GitChangeStatus, CommitItem } from './types.js';
 
 type GitServiceOptions = {
   cwd: string;           // repo 路徑
@@ -134,14 +134,121 @@ export class GitService {
 
   private async runGit(
     gitArgs: string[],
-    opts?: { stripFinalNewline?: boolean }
+    opts?: { stripFinalNewline?: boolean; reject?: boolean }
   ): Promise<string> {
     const { stdout } = await execa(this.gitBin, gitArgs, {
       cwd: this.cwd,
-      reject: true,
+      reject: opts?.reject ?? true,
       stripFinalNewline: opts?.stripFinalNewline ?? true,
     });
     return stdout;
+  }
+
+  /**
+   * 獲取 commit 歷史列表
+   * @param limit 限制返回的 commit 數量(預設 50)
+   */
+  async getCommitHistory(limit: number = 50): Promise<CommitItem[]> {
+    try {
+      const output = await this.runGit([
+        'log',
+        `--max-count=${limit}`,
+        '--pretty=format:%h|%an|%s|%ad',
+        '--date=short'
+      ]);
+      
+      if (!output.trim()) return [];
+      
+      const lines = output.trim().split('\n');
+      return lines.map(line => {
+        const [hash, author, message, date] = line.split('|');
+        return {
+          hash: hash || '',
+          author: author || '',
+          message: message || '',
+          date: date || ''
+        };
+      });
+    } catch (error) {
+      console.error('Failed to get commit history:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 獲取單個 commit 的 diff
+   * @param hash commit hash
+   */
+  async getCommitDiff(hash: string): Promise<string> {
+    try {
+      const output = await this.runGit([
+        'show',
+        '--no-color',
+        hash
+      ], { reject: false, stripFinalNewline: false });
+      return output;
+    } catch (error) {
+      return `Error: Failed to get diff for commit ${hash}`;
+    }
+  }
+
+  /**
+   * 匯出單個 commit 的 diff
+   */
+  async exportCommitDiff(options: {
+    hash: string;
+    message: string;
+    outputPath: string;
+  }): Promise<void> {
+    const { hash, message, outputPath } = options;
+    
+    const diff = await this.getCommitDiff(hash);
+    
+    const header = [
+      '===================================================================',
+      `Commit: ${hash} - ${message}`,
+      '===================================================================',
+      ''
+    ].join('\n');
+    
+    const content = header + diff;
+    
+    const dir = path.dirname(outputPath);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(outputPath, content, 'utf-8');
+  }
+
+  /**
+   * 匯出多個 commit 的 diff(合併到單一檔案)
+   */
+  async exportMultipleCommits(options: {
+    commits: Array<{ hash: string; message: string }>;
+    outputPath: string;
+  }): Promise<void> {
+    const { commits, outputPath } = options;
+    
+    if (commits.length === 0) {
+      await fs.writeFile(outputPath, '', 'utf-8');
+      return;
+    }
+    
+    let combinedContent = '';
+    
+    for (const commit of commits) {
+      const diff = await this.getCommitDiff(commit.hash);
+      const header = [
+        '===================================================================',
+        `Commit: ${commit.hash} - ${commit.message}`,
+        '===================================================================',
+        ''
+      ].join('\n');
+      
+      combinedContent += header + diff + '\n\n';
+    }
+    
+    const dir = path.dirname(outputPath);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(outputPath, combinedContent, 'utf-8');
   }
 
   // 匯出單一檔案 diff

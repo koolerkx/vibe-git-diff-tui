@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import { GitService } from '../git/GitService.js';
-import type { GitChange } from '../git/types.js';
+import type { GitChange, CommitItem } from '../git/types.js';
 
 // 初始化 Git 服務
 const git = new GitService({ cwd: process.cwd() });
@@ -35,6 +35,9 @@ type DumpMode = 'tree' | 'flat';
 
 // 輸入模式
 type InputMode = 'normal' | 'export-path' | 'export-overview' | 'export-code-dump';
+
+// 焦點面板
+type FocusPane = 'files' | 'commits';
 
 // 樹狀節點型別
 type TreeNode = {
@@ -85,6 +88,22 @@ function getTimestampedFileName(prefix: string = 'diff'): string {
     
     // 格式: prefix_20251228_212945.txt
     return `${prefix}_${year}${month}${day}_${hours}${minutes}${seconds}.txt`;
+}
+
+// 生成 commit 專用的檔案名
+function getCommitFileName(commitHash: string): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    
+    // 格式: diff_{commit_hash}_{date}_{time}.txt
+    const date = `${year}${month}${day}`;
+    const time = `${hours}${minutes}${seconds}`;
+    return `diff_${commitHash}_${date}_${time}.txt`;
 }
 
 // 生成帶時間戳的目錄名
@@ -481,6 +500,13 @@ export const App = () => {
     const [stagedFiles, setStagedFiles] = useState<GitChange[]>([]);
     const [unstagedFiles, setUnstagedFiles] = useState<GitChange[]>([]);
 
+    // Commit 相關狀態
+    const [commits, setCommits] = useState<CommitItem[]>([]);
+    const [commitFocusIndex, setCommitFocusIndex] = useState(0);
+    const [commitScrollOffset, setCommitScrollOffset] = useState(0);
+    const [selectedCommits, setSelectedCommits] = useState<Set<string>>(new Set());
+    const [focusPane, setFocusPane] = useState<FocusPane>('files');
+
     // 列表焦點 index
     const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -596,6 +622,20 @@ export const App = () => {
             }
         };
         load();
+    }, []);
+
+    // 載入 commits
+    const loadCommits = async () => {
+        try {
+            const commitHistory = await git.getCommitHistory(100);
+            setCommits(commitHistory);
+        } catch (e) {
+            setDiffContent(`Error loading commits: ${e}`);
+        }
+    };
+
+    useEffect(() => {
+        loadCommits();
     }, []);
 
     // 計算當前選中項
@@ -743,6 +783,112 @@ export const App = () => {
         }
     };
 
+    // 導出選中的 commits
+    const handleExportCommits = async (outputPath: string) => {
+        const selected = Array.from(selectedCommits);
+        if (selected.length === 0) {
+            // 導出當前焦點的 commit
+            const currentCommit = commits[commitFocusIndex];
+            if (!currentCommit) {
+                setExportStatus('❌ No commit selected');
+                setTimeout(() => setExportStatus(''), 2000);
+                return;
+            }
+            
+            try {
+                const path = await import('path');
+                const fs = await import('fs');
+                const fsPromises = await import('fs/promises');
+                
+                // 解析路徑
+                let resolvedPath = outputPath 
+                    ? (path.isAbsolute(outputPath) 
+                        ? outputPath 
+                        : path.resolve(process.cwd(), outputPath))
+                    : path.resolve(process.cwd(), getCommitFileName(currentCommit.hash));
+                
+                // ✅ 檢查是否為目錄
+                try {
+                    const stat = fs.statSync(resolvedPath);
+                    if (stat.isDirectory()) {
+                        // ✅ 如果是目錄，使用 commit 檔名格式
+                        resolvedPath = path.join(resolvedPath, getCommitFileName(currentCommit.hash));
+                    }
+                } catch {
+                    // 檔案不存在，檢查是否沒有副檔名
+                    if (path.extname(resolvedPath) === '') {
+                        // ✅ 可能是目錄，使用 commit 檔名格式
+                        resolvedPath = path.join(resolvedPath, getCommitFileName(currentCommit.hash));
+                    }
+                }
+                
+                // 確保目錄存在
+                const dir = path.dirname(resolvedPath);
+                await fsPromises.mkdir(dir, { recursive: true });
+                
+                await git.exportCommitDiff({
+                    hash: currentCommit.hash,
+                    message: currentCommit.message,
+                    outputPath: resolvedPath
+                });
+                setExportStatus(`✅ Exported to ${resolvedPath}`);
+                setTimeout(() => setExportStatus(''), 3000);
+            } catch (e) {
+                setExportStatus(`❌ Export failed: ${e}`);
+                setTimeout(() => setExportStatus(''), 3000);
+            }
+        } else {
+            // 導出多個 commits
+            try {
+                const path = await import('path');
+                const fs = await import('fs');
+                const fsPromises = await import('fs/promises');
+                
+                // 解析路徑
+                let resolvedPath = outputPath 
+                    ? (path.isAbsolute(outputPath) 
+                        ? outputPath 
+                        : path.resolve(process.cwd(), outputPath))
+                    : path.resolve(process.cwd(), getTimestampedFileName('commits'));
+                
+                // ✅ 檢查是否為目錄
+                try {
+                    const stat = fs.statSync(resolvedPath);
+                    if (stat.isDirectory()) {
+                        // ✅ 如果是目錄，使用時間戳檔案名
+                        resolvedPath = path.join(resolvedPath, getTimestampedFileName('commits'));
+                    }
+                } catch {
+                    // 檔案不存在，檢查是否沒有副檔名
+                    if (path.extname(resolvedPath) === '') {
+                        // ✅ 可能是目錄，使用時間戳檔案名
+                        resolvedPath = path.join(resolvedPath, getTimestampedFileName('commits'));
+                    }
+                }
+                
+                // 確保目錄存在
+                const dir = path.dirname(resolvedPath);
+                await fsPromises.mkdir(dir, { recursive: true });
+                
+                const commitsToExport = commits
+                    .filter(c => selected.includes(c.hash))
+                    .map(c => ({ hash: c.hash, message: c.message }));
+                
+                await git.exportMultipleCommits({
+                    commits: commitsToExport,
+                    outputPath: resolvedPath
+                });
+                
+                setExportStatus(`✅ Exported ${commitsToExport.length} commits to ${resolvedPath}`);
+                setSelectedCommits(new Set());
+                setTimeout(() => setExportStatus(''), 3000);
+            } catch (e) {
+                setExportStatus(`❌ Export failed: ${e}`);
+                setTimeout(() => setExportStatus(''), 3000);
+            }
+        }
+    };
+
     // 匯出合併的程式碼庫
     const handleExportCodeDump = async (outputPath: string, mode: DumpMode) => {
         try {
@@ -825,30 +971,47 @@ export const App = () => {
     // 切換檔案時重置 Diff Scroll
     useEffect(() => {
         setDiffScrollTop(0);
-    }, [selectedIndex]);
+    }, [selectedIndex, commitFocusIndex, focusPane]);
 
     // 載入 Diff
     useEffect(() => {
         const fetchDiff = async () => {
-            if (!currentFile || !currentGroup) {
-                setDiffContent('');
-                return;
-            }
-            
-            try {
-                const txt = await git.getDiff({
-                    staged: currentGroup === 'staged',
-                    path: currentFile.path,
-                    status: currentFile.status,
-                });
-                setDiffContent(txt);
-            } catch (e) {
-                setDiffContent('(Error loading diff)');
+            if (focusPane === 'commits') {
+                // 顯示 commit diff
+                const currentCommit = commits[commitFocusIndex];
+                if (!currentCommit) {
+                    setDiffContent('');
+                    return;
+                }
+                
+                try {
+                    const txt = await git.getCommitDiff(currentCommit.hash);
+                    setDiffContent(txt);
+                } catch (e) {
+                    setDiffContent('(Error loading commit diff)');
+                }
+            } else {
+                // 顯示文件 diff
+                if (!currentFile || !currentGroup) {
+                    setDiffContent('');
+                    return;
+                }
+                
+                try {
+                    const txt = await git.getDiff({
+                        staged: currentGroup === 'staged',
+                        path: currentFile.path,
+                        status: currentFile.status,
+                    });
+                    setDiffContent(txt);
+                } catch (e) {
+                    setDiffContent('(Error loading diff)');
+                }
             }
         };
         
         fetchDiff();
-    }, [currentFile, currentGroup]);
+    }, [currentFile, currentGroup, focusPane, commits, commitFocusIndex]);
 
     // 鍵盤操作
     useInput((input, key) => {
@@ -874,10 +1037,28 @@ export const App = () => {
                 
                 if (inputMode === 'export-path') {
                     // 匯出 diff
-                    const finalPath = pathInput.trim() === '' 
-                        ? `./${getTimestampedFileName('diff')}` 
-                        : pathInput;
-                    handleExportMultiple(finalPath);
+                    if (focusPane === 'commits') {
+                        let finalPath = pathInput.trim();
+                        if (finalPath === '') {
+                            // 使用預設檔名格式
+                            const currentCommit = commits[commitFocusIndex];
+                            if (currentCommit) {
+                                finalPath = `./${getCommitFileName(currentCommit.hash)}`;
+                            } else {
+                                finalPath = `./${getTimestampedFileName('commit')}`;
+                            }
+                        }
+                        handleExportCommits(finalPath);
+                    } else {
+                        const finalPath = pathInput.trim() === '' 
+                            ? `./${getTimestampedFileName('diff')}` 
+                            : pathInput;
+                        if (selectedPaths.size === 0) {
+                            handleExportSingle();
+                        } else {
+                            handleExportMultiple(finalPath);
+                        }
+                    }
                 } else if (inputMode === 'export-overview') {
                     // 匯出概覽
                     const finalPath = pathInput.trim() === '' 
@@ -984,6 +1165,12 @@ export const App = () => {
             return;
         }
 
+        // Tab: 切換焦點面板
+        if (key.tab) {
+            setFocusPane(prev => prev === 'files' ? 'commits' : 'files');
+            return;
+        }
+
         // '/' 切換顯示模式
         if (input === '/') {
             setViewMode(prev => prev === 'flat' ? 'tree' : 'flat');
@@ -993,27 +1180,52 @@ export const App = () => {
         }
 
         // 上移
-        if (key.upArrow) {
-            setSelectedIndex(prev => {
-                const nextIndex = Math.max(prev - 1, 0);
-                // 自動捲動
-                if (nextIndex < listScrollTop) {
-                    setListScrollTop(nextIndex);
-                }
-                return nextIndex;
-            });
+        if (key.upArrow || input === 'k') {
+            if (focusPane === 'files') {
+                setSelectedIndex(prev => {
+                    const nextIndex = Math.max(prev - 1, 0);
+                    // 自動捲動
+                    const filesPaneHeight = Math.floor(mainAreaHeight / 2);
+                    if (nextIndex < listScrollTop) {
+                        setListScrollTop(nextIndex);
+                    }
+                    return nextIndex;
+                });
+            } else {
+                setCommitFocusIndex(prev => {
+                    const nextIndex = Math.max(prev - 1, 0);
+                    if (nextIndex < commitScrollOffset) {
+                        setCommitScrollOffset(nextIndex);
+                    }
+                    return nextIndex;
+                });
+            }
+            return;
         }
 
         // 下移
-        if (key.downArrow) {
-            setSelectedIndex(prev => {
-                const nextIndex = Math.min(prev + 1, allItems.length - 1);
-                // 自動捲動
-                if (nextIndex >= listScrollTop + mainAreaHeight) {
-                    setListScrollTop(nextIndex - mainAreaHeight + 1);
-                }
-                return nextIndex;
-            });
+        if (key.downArrow || input === 'j') {
+            if (focusPane === 'files') {
+                setSelectedIndex(prev => {
+                    const nextIndex = Math.min(prev + 1, allItems.length - 1);
+                    // 自動捲動
+                    const filesPaneHeight = Math.floor(mainAreaHeight / 2);
+                    if (nextIndex >= listScrollTop + filesPaneHeight) {
+                        setListScrollTop(nextIndex - filesPaneHeight + 1);
+                    }
+                    return nextIndex;
+                });
+            } else {
+                setCommitFocusIndex(prev => {
+                    const nextIndex = Math.min(prev + 1, commits.length - 1);
+                    const commitPaneHeight = Math.floor(mainAreaHeight / 2);
+                    if (nextIndex >= commitScrollOffset + commitPaneHeight) {
+                        setCommitScrollOffset(nextIndex - commitPaneHeight + 1);
+                    }
+                    return nextIndex;
+                });
+            }
+            return;
         }
 
         // Diff 捲動 (PageUp/PageDown)
@@ -1028,42 +1240,58 @@ export const App = () => {
             setDiffScrollTop(prev => Math.max(0, prev - SCROLL_LINES));
         }
 
-        // Space: 勾選檔案或分組全選
+        // Space: 切換選擇
         if (input === ' ') {
-            const currentItem = allItems[selectedIndex];
-            
-            if (currentItem?.type === 'group') {
-                // 在分組標題上：全選/取消該分組
-                const newSet = new Set(selectedPaths);
-                
-                // 找出該分組的所有檔案
-                const groupLabel = currentItem.label;
-                const isStaged = groupLabel === 'Staged Changes';
-                const groupFiles = (isStaged ? stagedFiles : unstagedFiles);
-                
-                // 檢查是否已全選
-                const allSelected = groupFiles.every(f => newSet.has(f.path));
-                
-                if (allSelected) {
-                    // 取消該分組所有選擇
-                    groupFiles.forEach(f => newSet.delete(f.path));
-                } else {
-                    // 全選該分組
-                    groupFiles.forEach(f => newSet.add(f.path));
+            if (focusPane === 'commits') {
+                const commit = commits[commitFocusIndex];
+                if (commit) {
+                    setSelectedCommits(prev => {
+                        const next = new Set(prev);
+                        if (next.has(commit.hash)) {
+                            next.delete(commit.hash);
+                        } else {
+                            next.add(commit.hash);
+                        }
+                        return next;
+                    });
                 }
+            } else {
+                const currentItem = allItems[selectedIndex];
                 
-                setSelectedPaths(newSet);
-            } else if (currentItem?.type === 'file') {
-                // 在檔案上：切換單個檔案選擇
-                const newSet = new Set(selectedPaths);
-                const path = currentItem.file.path;
-                if (newSet.has(path)) {
-                    newSet.delete(path);
-                } else {
-                    newSet.add(path);
+                if (currentItem?.type === 'group') {
+                    // 在分組標題上：全選/取消該分組
+                    const newSet = new Set(selectedPaths);
+                    
+                    // 找出該分組的所有檔案
+                    const groupLabel = currentItem.label;
+                    const isStaged = groupLabel === 'Staged Changes';
+                    const groupFiles = (isStaged ? stagedFiles : unstagedFiles);
+                    
+                    // 檢查是否已全選
+                    const allSelected = groupFiles.every(f => newSet.has(f.path));
+                    
+                    if (allSelected) {
+                        // 取消該分組所有選擇
+                        groupFiles.forEach(f => newSet.delete(f.path));
+                    } else {
+                        // 全選該分組
+                        groupFiles.forEach(f => newSet.add(f.path));
+                    }
+                    
+                    setSelectedPaths(newSet);
+                } else if (currentItem?.type === 'file') {
+                    // 在檔案上：切換單個檔案選擇
+                    const newSet = new Set(selectedPaths);
+                    const path = currentItem.file.path;
+                    if (newSet.has(path)) {
+                        newSet.delete(path);
+                    } else {
+                        newSet.add(path);
+                    }
+                    setSelectedPaths(newSet);
                 }
-                setSelectedPaths(newSet);
             }
+            return;
         }
 
         // Enter: 在樹狀模式下展開/收合目錄
@@ -1121,15 +1349,23 @@ export const App = () => {
 
         // 'E' (Shift+e): 進入路徑輸入模式
         if (input === 'E') {
-            if (selectedPaths.size === 0) {
-                setExportStatus('No files selected');
-                setTimeout(() => setExportStatus(''), 2000);
-                return;
+            if (focusPane === 'commits') {
+                // Commits 模式：允許導出當前或選中的 commits
+                setInputMode('export-path');
+                setPathInput('');
+                setCursorPosition(0);
+            } else {
+                // Files 模式：需要選中文件
+                if (selectedPaths.size === 0) {
+                    setExportStatus('No files selected');
+                    setTimeout(() => setExportStatus(''), 2000);
+                    return;
+                }
+                
+                setInputMode('export-path');
+                setPathInput(''); // ✅ 空白開始
+                setCursorPosition(0); // ✅ 游標在開頭
             }
-            
-            setInputMode('export-path');
-            setPathInput(''); // ✅ 空白開始
-            setCursorPosition(0); // ✅ 游標在開頭
             return;
         }
 
@@ -1156,16 +1392,24 @@ export const App = () => {
             return;
         }
 
-        // 'e': 匯出當前檔案 diff（保持原邏輯）
+        // 'e': 快速匯出
         if (input === 'e') {
-            handleExportSingle();
+            if (focusPane === 'commits') {
+                const commit = commits[commitFocusIndex];
+                if (commit) {
+                    handleExportCommits(getCommitFileName(commit.hash));
+                }
+            } else {
+                handleExportSingle();
+            }
             return;
         }
     });
 
     // 準備渲染資料 (Slice)
-    // 左側清單 Slice
-    const visibleItems = allItems.slice(listScrollTop, listScrollTop + mainAreaHeight);
+    // 左側清單 Slice (文件列表高度為 mainAreaHeight / 2)
+    const filesPaneHeight = Math.floor(mainAreaHeight / 2);
+    const visibleItems = allItems.slice(listScrollTop, listScrollTop + filesPaneHeight);
 
     // 右側 Diff Slice
     const diffLines = diffContent.split('\n');
@@ -1219,7 +1463,10 @@ export const App = () => {
                                     // 如果路徑為空，顯示提示
                                     if (pathInput.length === 0) {
                                         let defaultName = '';
-                                        if (inputMode === 'export-path') defaultName = 'diff_YYYYMMDD_HHMMSS.txt';
+                                        if (inputMode === 'export-path') {
+                                            // 需要檢查 focusPane，但這裡無法訪問，所以用通用提示
+                                            defaultName = 'diff_YYYYMMDD_HHMMSS.txt';
+                                        }
                                         else if (inputMode === 'export-overview') defaultName = 'files_overview_YYYYMMDD_HHMMSS.txt';
                                         else if (inputMode === 'export-code-dump') {
                                             // ✅ 兩種模式都是同一個目錄，只是內部結構不同
@@ -1247,7 +1494,12 @@ export const App = () => {
 
                         <Box marginTop={1}>
                             <Text color="yellow">
-                                {inputMode === 'export-path' && `${selectedPaths.size} file(s) selected`}
+                                {inputMode === 'export-path' && focusPane === 'commits' && 
+                                    (selectedCommits.size > 0 
+                                        ? `${selectedCommits.size} commit(s) selected` 
+                                        : 'Current commit')}
+                                {inputMode === 'export-path' && focusPane === 'files' && 
+                                    `${selectedPaths.size} file(s) selected`}
                                 {inputMode === 'export-overview' && 'All Git tracked files'}
                                 {inputMode === 'export-code-dump' && 'Merge C++ & export all files'}
                             </Text>
@@ -1274,96 +1526,139 @@ export const App = () => {
             ) : (
                 // ===== 正常瀏覽模式（原有內容） =====
                 <Box flexGrow={1} flexDirection="row">
-                    {/* 左欄 */}
-                    <Box width="50%" borderStyle="single" flexDirection="column">
-                        {/* Header */}
-                        <Box borderStyle="single" borderColor="blue" paddingX={1}>
-                            <Text color="cyan" bold>Files</Text>
-                        </Box>
-
-                        {/* Content */}
-                        <Box flexGrow={1} flexDirection="column" paddingX={1}>
-                            {visibleItems.length === 0 ? (
-                                <Text dimColor>No changes.</Text>
-                            ) : (
-                                visibleItems.map((item, i) => {
-                                    const realIndex = listScrollTop + i;
-                                    const isFocused = realIndex === selectedIndex;
-                                    const bgColor = isFocused ? 'blue' : undefined;
-
-                                    if (item.type === 'group') {
-                                        return (
-                                            <Box key={`group-${item.label}`}>
-                                                <Text {...(bgColor ? { backgroundColor: bgColor } : {})} bold>
-                                                    ▼ {item.label} ({item.count})
-                                                </Text>
-                                            </Box>
-                                        );
-                                    } else if (item.type === 'directory') {
-                                        const isCollapsed = collapsedDirs.has(item.node.path);
-                                        const indent = '  '.repeat(item.node.depth);
-                                        const icon = isCollapsed ? '▶' : '▼';
-
-                                        return (
-                                            <Box key={item.node.path}>
-                                                <Text {...(bgColor ? { backgroundColor: bgColor } : {})} color="cyan">
-                                                    {indent}{icon} {item.node.name}/
-                                                </Text>
-                                            </Box>
-                                        );
-                                    } else {
-                                        const { file, group } = item;
-                                        const isSelected = selectedPaths.has(file.path);
-                                        const checkMark = isSelected ? '✓' : ' ';
-                                        const indent = viewMode === 'tree' && item.node
-                                            ? '  '.repeat(item.node.depth)
-                                            : '';
-
-                                        let statusColor = 'white';
-                                        if (file.status === '?' || file.status === '??') statusColor = 'green';
-                                        if (file.status.includes('M')) statusColor = 'yellow';
-                                        if (file.status.includes('D')) statusColor = 'red';
-
-                                        return (
-                                            <Box key={file.path}>
-                                                <Text {...(bgColor ? { backgroundColor: bgColor } : {})}>
-                                                    {indent}
-                                                    <Text color={isSelected ? 'green' : 'gray'}>[{checkMark}]</Text>
-                                                    <Text color={statusColor}> {file.status.trim().padEnd(2)} </Text>
-                                                    <Text>{viewMode === 'tree' ? file.path.split('/').pop() || file.path : file.path}</Text>
-                                                </Text>
-                                            </Box>
-                                        );
-                                    }
-                                })
-                            )}
-                        </Box>
-
-                        {/* Footer */}
-                        <Box borderStyle="single" paddingX={1}>
-                            <Text>
-                                <Text color="cyan">{viewMode === 'flat' ? 'Files' : 'Tree'}</Text>
-                                <Text dimColor> | </Text>
-                                <Text color="yellow">
-                                    Selected: {selectedPaths.size}/{allItems.filter(item => item.type === 'file').length}
+                    {/* 左欄: 上下分割為文件列表和 commit 列表 */}
+                    <Box width="40%" borderStyle="single" borderColor="gray" flexDirection="column">
+                        {/* 上半部: 文件列表 */}
+                        <Box flexDirection="column" height={Math.floor(mainAreaHeight / 2) + 4}>
+                            {/* Header */}
+                            <Box borderStyle="single" borderColor="cyan" paddingX={1}>
+                                <Text bold color="cyan">
+                                    Files [{focusPane === 'files' ? '●' : '○'}]
                                 </Text>
-                                <Text dimColor> | </Text>
-                                {exportStatus ? (
-                                    <Text color="green">{exportStatus}</Text>
+                                <Text color="gray"> ({viewMode}) </Text>
+                                <Text color="yellow">
+                                    {selectedPaths.size > 0 ? `[${selectedPaths.size} selected]` : ''}
+                                </Text>
+                            </Box>
+                            
+                            {/* Content */}
+                            <Box flexDirection="column" paddingX={1} flexGrow={1}>
+                                {visibleItems.length === 0 ? (
+                                    <Text dimColor>No changes.</Text>
                                 ) : (
-                                    <Text dimColor>
-                                        e:Export E:ExportAll D:CodeDump f:Overview F:OverviewTo Spc:Select a:All /:Mode {viewMode === 'tree' && 'Enter:Toggle'} q:Quit
-                                    </Text>
+                                    visibleItems.map((item, i) => {
+                                        const realIndex = listScrollTop + i;
+                                        const isFocused = focusPane === 'files' && realIndex === selectedIndex;
+                                        const bgColor = isFocused ? 'blue' : undefined;
+
+                                        if (item.type === 'group') {
+                                            return (
+                                                <Box key={`group-${item.label}`}>
+                                                    <Text {...(bgColor ? { backgroundColor: bgColor } : {})} bold>
+                                                        ▼ {item.label} ({item.count})
+                                                    </Text>
+                                                </Box>
+                                            );
+                                        } else if (item.type === 'directory') {
+                                            const isCollapsed = collapsedDirs.has(item.node.path);
+                                            const indent = '  '.repeat(item.node.depth);
+                                            const icon = isCollapsed ? '▶' : '▼';
+
+                                            return (
+                                                <Box key={item.node.path}>
+                                                    <Text {...(bgColor ? { backgroundColor: bgColor } : {})} color="cyan">
+                                                        {indent}{icon} {item.node.name}/
+                                                    </Text>
+                                                </Box>
+                                            );
+                                        } else {
+                                            const { file, group } = item;
+                                            const isSelected = selectedPaths.has(file.path);
+                                            const checkMark = isSelected ? '✓' : ' ';
+                                            const indent = viewMode === 'tree' && item.node
+                                                ? '  '.repeat(item.node.depth)
+                                                : '';
+
+                                            let statusColor = 'white';
+                                            if (file.status === '?' || file.status === '??') statusColor = 'green';
+                                            if (file.status.includes('M')) statusColor = 'yellow';
+                                            if (file.status.includes('D')) statusColor = 'red';
+
+                                            return (
+                                                <Box key={file.path}>
+                                                    <Text {...(bgColor ? { backgroundColor: bgColor } : {})}>
+                                                        {indent}
+                                                        <Text color={isSelected ? 'green' : 'gray'}>[{checkMark}]</Text>
+                                                        <Text color={statusColor}> {file.status.trim().padEnd(2)} </Text>
+                                                        <Text>{viewMode === 'tree' ? file.path.split('/').pop() || file.path : file.path}</Text>
+                                                    </Text>
+                                                </Box>
+                                            );
+                                        }
+                                    })
                                 )}
-                            </Text>
+                            </Box>
+                            
+                            {/* Footer */}
+                            <Box borderStyle="single" borderColor="gray" paddingX={1}>
+                                <Text color="gray" dimColor>
+                                    ↑↓:Nav Space:Select E:Export e:Quick r:Refresh /:Toggle Tab:Switch q:Quit
+                                </Text>
+                            </Box>
+                        </Box>
+                        
+                        {/* 下半部: Commit 列表 */}
+                        <Box flexDirection="column" height={Math.floor(mainAreaHeight / 2)}>
+                            {/* Header */}
+                            <Box borderStyle="single" borderColor="magenta" paddingX={1}>
+                                <Text bold color="magenta">
+                                    Commits [{focusPane === 'commits' ? '●' : '○'}]
+                                </Text>
+                                <Text color="yellow">
+                                    {selectedCommits.size > 0 ? `[${selectedCommits.size} selected]` : ''}
+                                </Text>
+                            </Box>
+                            
+                            {/* Content */}
+                            <Box flexDirection="column" paddingX={1} flexGrow={1}>
+                                {commits
+                                    .slice(
+                                        commitScrollOffset,
+                                        commitScrollOffset + Math.floor(mainAreaHeight / 2)
+                                    )
+                                    .map((commit, idx) => {
+                                        const actualIndex = commitScrollOffset + idx;
+                                        const isFocused = focusPane === 'commits' && actualIndex === commitFocusIndex;
+                                        const isSelected = selectedCommits.has(commit.hash);
+                                        
+                                        return (
+                                            <Box key={commit.hash}>
+                                                <Text color={isFocused ? 'cyan' : 'white'} bold={isFocused}>
+                                                    {isFocused ? '>' : ' '}
+                                                    {isSelected ? '[✓] ' : '[ ] '}
+                                                </Text>
+                                                <Text color={isFocused ? 'yellow' : 'gray'}>
+                                                    {commit.hash}
+                                                </Text>
+                                                <Text color={isFocused ? 'white' : 'gray'}>
+                                                    {' '}
+                                                    {commit.message.slice(0, 40)}
+                                                    {commit.message.length > 40 ? '...' : ''}
+                                                </Text>
+                                            </Box>
+                                        );
+                                    })}
+                            </Box>
                         </Box>
                     </Box>
 
-                    {/* 右欄 */}
-                    <Box width="50%" borderStyle="single" flexDirection="column">
+                    {/* 右欄: Diff 預覽 */}
+                    <Box width="60%" borderStyle="single" flexDirection="column">
                         <Box borderStyle="single" borderColor="yellow" paddingX={1}>
                             <Text color="yellow" bold>
-                                {currentFile?.path || 'No file'}
+                                {focusPane === 'commits' 
+                                    ? (commits[commitFocusIndex] ? `${commits[commitFocusIndex].hash} - ${commits[commitFocusIndex].message}` : 'No commit')
+                                    : (currentFile?.path || 'No file')}
                             </Text>
                             {diffLines.length > mainAreaHeight && (
                                 <Text dimColor> {diffProgress}%</Text>
@@ -1378,6 +1673,12 @@ export const App = () => {
                             <Text dimColor>PgUp/PgDn: Scroll Diff</Text>
                         </Box>
                     </Box>
+                </Box>
+            )}
+            
+            {exportStatus && (
+                <Box paddingX={1} paddingY={1}>
+                    <Text>{exportStatus}</Text>
                 </Box>
             )}
         </Box>
