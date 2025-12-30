@@ -1185,7 +1185,7 @@ export const App = () => {
                 setSelectedIndex(prev => {
                     const nextIndex = Math.max(prev - 1, 0);
                     // 自動捲動
-                    const filesPaneHeight = Math.floor(mainAreaHeight / 2);
+                    const filesPaneHeight = Math.floor(mainAreaHeight * 2 / 4);
                     if (nextIndex < listScrollTop) {
                         setListScrollTop(nextIndex);
                     }
@@ -1209,7 +1209,7 @@ export const App = () => {
                 setSelectedIndex(prev => {
                     const nextIndex = Math.min(prev + 1, allItems.length - 1);
                     // 自動捲動
-                    const filesPaneHeight = Math.floor(mainAreaHeight / 2);
+                    const filesPaneHeight = Math.floor(mainAreaHeight * 2 / 4);
                     if (nextIndex >= listScrollTop + filesPaneHeight) {
                         setListScrollTop(nextIndex - filesPaneHeight + 1);
                     }
@@ -1218,7 +1218,7 @@ export const App = () => {
             } else {
                 setCommitFocusIndex(prev => {
                     const nextIndex = Math.min(prev + 1, commits.length - 1);
-                    const commitPaneHeight = Math.floor(mainAreaHeight / 2);
+                    const commitPaneHeight = Math.floor(mainAreaHeight / 4);
                     if (nextIndex >= commitScrollOffset + commitPaneHeight) {
                         setCommitScrollOffset(nextIndex - commitPaneHeight + 1);
                     }
@@ -1407,8 +1407,8 @@ export const App = () => {
     });
 
     // 準備渲染資料 (Slice)
-    // 左側清單 Slice (文件列表高度為 mainAreaHeight / 2)
-    const filesPaneHeight = Math.floor(mainAreaHeight / 2);
+    // 左側清單 Slice (文件列表高度為 mainAreaHeight * 2/4)
+    const filesPaneHeight = Math.floor(mainAreaHeight * 2 / 4);
     const visibleItems = allItems.slice(listScrollTop, listScrollTop + filesPaneHeight);
 
     // 右側 Diff Slice
@@ -1526,10 +1526,10 @@ export const App = () => {
             ) : (
                 // ===== 正常瀏覽模式（原有內容） =====
                 <Box flexGrow={1} flexDirection="row">
-                    {/* 左欄: 上下分割為文件列表和 commit 列表 */}
-                    <Box width="40%" borderStyle="single" borderColor="gray" flexDirection="column">
-                        {/* 上半部: 文件列表 */}
-                        <Box flexDirection="column" height={Math.floor(mainAreaHeight / 2) + 4}>
+                    {/* 左欄: 1/3 寬度，分為文件列表(2/3)、commit列表(1/3)、Footer(hug content) */}
+                    <Box width="33%" borderStyle="single" borderColor="gray" flexDirection="column">
+                        {/* 上半部: 文件列表 (2/3 剩餘高度) */}
+                        <Box flexDirection="column" flexGrow={2}>
                             {/* Header */}
                             <Box borderStyle="single" borderColor="cyan" paddingX={1}>
                                 <Text bold color="cyan">
@@ -1598,17 +1598,10 @@ export const App = () => {
                                     })
                                 )}
                             </Box>
-                            
-                            {/* Footer */}
-                            <Box borderStyle="single" borderColor="gray" paddingX={1}>
-                                <Text color="gray" dimColor>
-                                    ↑↓:Nav Space:Select E:Export e:Quick r:Refresh /:Toggle Tab:Switch q:Quit
-                                </Text>
-                            </Box>
                         </Box>
                         
-                        {/* 下半部: Commit 列表 */}
-                        <Box flexDirection="column" height={Math.floor(mainAreaHeight / 2)}>
+                        {/* 中間部: Commit 列表 (1/3 剩餘高度) */}
+                        <Box flexDirection="column" flexGrow={1}>
                             {/* Header */}
                             <Box borderStyle="single" borderColor="magenta" paddingX={1}>
                                 <Text bold color="magenta">
@@ -1624,12 +1617,18 @@ export const App = () => {
                                 {commits
                                     .slice(
                                         commitScrollOffset,
-                                        commitScrollOffset + Math.floor(mainAreaHeight / 2)
+                                        commitScrollOffset + Math.floor(mainAreaHeight / 4)
                                     )
                                     .map((commit, idx) => {
                                         const actualIndex = commitScrollOffset + idx;
                                         const isFocused = focusPane === 'commits' && actualIndex === commitFocusIndex;
                                         const isSelected = selectedCommits.has(commit.hash);
+                                        
+                                        // 計算可用寬度（左側面板 33%，減去 padding 和 hash 等）
+                                        const availableWidth = Math.floor((columns * 0.33) - 20); // 預留空間給 hash、選擇標記等
+                                        const truncatedMessage = commit.message.length > availableWidth
+                                            ? commit.message.slice(0, availableWidth - 3) + '...'
+                                            : commit.message;
                                         
                                         return (
                                             <Box key={commit.hash}>
@@ -1642,18 +1641,24 @@ export const App = () => {
                                                 </Text>
                                                 <Text color={isFocused ? 'white' : 'gray'}>
                                                     {' '}
-                                                    {commit.message.slice(0, 40)}
-                                                    {commit.message.length > 40 ? '...' : ''}
+                                                    {truncatedMessage}
                                                 </Text>
                                             </Box>
                                         );
                                     })}
                             </Box>
                         </Box>
+                        
+                        {/* 底部: Footer 鍵位映射 (hug content) */}
+                        <Box borderStyle="single" borderColor="gray" paddingX={0} paddingY={0}>
+                            <Text color="gray" dimColor>
+                                ↑↓:Nav Space:Select E:Export e:Quick r:Refresh /:Toggle Tab:Switch q:Quit
+                            </Text>
+                        </Box>
                     </Box>
 
-                    {/* 右欄: Diff 預覽 */}
-                    <Box width="60%" borderStyle="single" flexDirection="column">
+                    {/* 右欄: Diff 預覽 (2/3 寬度) */}
+                    <Box width="67%" borderStyle="single" flexDirection="column">
                         <Box borderStyle="single" borderColor="yellow" paddingX={1}>
                             <Text color="yellow" bold>
                                 {focusPane === 'commits' 
