@@ -1165,9 +1165,21 @@ export const App = () => {
             return;
         }
 
-        // Tab: 切換焦點面板
+        // Tab 或左右箭头: 切換焦點面板
         if (key.tab) {
             setFocusPane(prev => prev === 'files' ? 'commits' : 'files');
+            return;
+        }
+        
+        // 左箭头: 切换到文件列表
+        if (key.leftArrow) {
+            setFocusPane('files');
+            return;
+        }
+        
+        // 右箭头: 切换到 commit 列表
+        if (key.rightArrow) {
+            setFocusPane('commits');
             return;
         }
 
