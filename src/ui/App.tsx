@@ -1230,7 +1230,8 @@ export const App = () => {
             } else {
                 setCommitFocusIndex(prev => {
                     const nextIndex = Math.min(prev + 1, commits.length - 1);
-                    const commitPaneHeight = Math.floor(mainAreaHeight / 4);
+                    // 計算 commit 列表的實際可用高度（與渲染邏輯保持一致）
+                    const commitPaneHeight = Math.max(8, Math.floor(mainAreaHeight * 0.4));
                     if (nextIndex >= commitScrollOffset + commitPaneHeight) {
                         setCommitScrollOffset(nextIndex - commitPaneHeight + 1);
                     }
@@ -1624,41 +1625,51 @@ export const App = () => {
                                 </Text>
                             </Box>
                             
-                            {/* Content */}
-                            <Box flexDirection="column" paddingX={1} flexGrow={1}>
-                                {commits
-                                    .slice(
-                                        commitScrollOffset,
-                                        commitScrollOffset + Math.floor(mainAreaHeight / 4)
-                                    )
-                                    .map((commit, idx) => {
-                                        const actualIndex = commitScrollOffset + idx;
-                                        const isFocused = focusPane === 'commits' && actualIndex === commitFocusIndex;
-                                        const isSelected = selectedCommits.has(commit.hash);
-                                        
-                                        // 計算可用寬度（左側面板 33%，減去 padding 和 hash 等）
-                                        const availableWidth = Math.floor((columns * 0.33) - 20); // 預留空間給 hash、選擇標記等
-                                        const truncatedMessage = commit.message.length > availableWidth
-                                            ? commit.message.slice(0, availableWidth - 3) + '...'
-                                            : commit.message;
-                                        
-                                        return (
-                                            <Box key={commit.hash}>
-                                                <Text color={isFocused ? 'cyan' : 'white'} bold={isFocused}>
-                                                    {isFocused ? '>' : ' '}
-                                                    {isSelected ? '[✓] ' : '[ ] '}
-                                                </Text>
-                                                <Text color={isFocused ? 'yellow' : 'gray'}>
-                                                    {commit.hash}
-                                                </Text>
-                                                <Text color={isFocused ? 'white' : 'gray'}>
-                                                    {' '}
-                                                    {truncatedMessage}
-                                                </Text>
-                                            </Box>
-                                        );
-                                    })}
-                            </Box>
+                            {/* Content - 計算實際可用高度 */}
+                            {(() => {
+                                // 計算 commit 列表的實際可用高度
+                                // 文件列表 flexGrow=2, commit 列表 flexGrow=1, 所以 commit 列表約佔 1/3 的 mainAreaHeight
+                                // 減去 header (約 2 行) 和邊框，使用更合理的計算
+                                // 使用更大的比例確保顯示更多 commit
+                                const commitPaneHeight = Math.max(8, Math.floor(mainAreaHeight * 0.4));
+                                
+                                return (
+                                    <Box flexDirection="column" paddingX={1} flexGrow={1}>
+                                        {commits
+                                            .slice(
+                                                commitScrollOffset,
+                                                commitScrollOffset + commitPaneHeight
+                                            )
+                                            .map((commit, idx) => {
+                                                const actualIndex = commitScrollOffset + idx;
+                                                const isFocused = focusPane === 'commits' && actualIndex === commitFocusIndex;
+                                                const isSelected = selectedCommits.has(commit.hash);
+                                                
+                                                // 計算可用寬度（左側面板 33%，減去 padding 和 hash 等）
+                                                const availableWidth = Math.floor((columns * 0.33) - 20); // 預留空間給 hash、選擇標記等
+                                                const truncatedMessage = commit.message.length > availableWidth
+                                                    ? commit.message.slice(0, availableWidth - 3) + '...'
+                                                    : commit.message;
+                                                
+                                                return (
+                                                    <Box key={commit.hash}>
+                                                        <Text color={isFocused ? 'cyan' : 'white'} bold={isFocused}>
+                                                            {isFocused ? '>' : ' '}
+                                                            {isSelected ? '[✓] ' : '[ ] '}
+                                                        </Text>
+                                                        <Text color={isFocused ? 'yellow' : 'gray'}>
+                                                            {commit.hash}
+                                                        </Text>
+                                                        <Text color={isFocused ? 'white' : 'gray'}>
+                                                            {' '}
+                                                            {truncatedMessage}
+                                                        </Text>
+                                                    </Box>
+                                                );
+                                            })}
+                                    </Box>
+                                );
+                            })()}
                         </Box>
                         
                         {/* 底部: Footer 鍵位映射 (hug content) */}
